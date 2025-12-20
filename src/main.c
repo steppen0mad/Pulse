@@ -39,12 +39,12 @@ void processInput(GLFWwindow* window) {
         camera.pos[2] -= sinf(yawRad) * velocity;
     }
     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-        camera.pos[0] -= sinf(yawRad) * velocity;
-        camera.pos[2] += cosf(yawRad) * velocity;
-    }
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
         camera.pos[0] += sinf(yawRad) * velocity;
         camera.pos[2] -= cosf(yawRad) * velocity;
+    }
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+        camera.pos[0] -= sinf(yawRad) * velocity;
+        camera.pos[2] += cosf(yawRad) * velocity;
     }
     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
         camera.pos[1] += velocity;
@@ -154,6 +154,7 @@ int main() {
     }
     
     glfwMakeContextCurrent(window);
+    glfwSwapInterval(0); /* disable VSync for uncapped framerate */
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     glfwSetCursorPosCallback(window, mouseCallback);
     
@@ -178,6 +179,12 @@ int main() {
         processInput(window);
         render();
         
+        // Update FPS in window title (simple overlay via title bar)
+        float fps = deltaTime > 0.0f ? 1.0f / deltaTime : 0.0f;
+        char title[128];
+        snprintf(title, sizeof(title), "3D Sandbox - FPS: %.1f", fps);
+        glfwSetWindowTitle(window, title);
+
         glfwSwapBuffers(window);
         glfwPollEvents();
     }

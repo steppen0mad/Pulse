@@ -8,15 +8,15 @@ TARGET = build/sandbox
 all: $(TARGET)
 
 $(TARGET): $(OBJ)
-$(CC) $(OBJ) -o $(TARGET) $(LDFLAGS)
+	$(CC) $(OBJ) -o $(TARGET) $(LDFLAGS)
 
 build/main.o: src/main.c
-$(CC) $(CFLAGS) -c src/main.c -o build/main.o
+	$(CC) $(CFLAGS) -c src/main.c -o build/main.o
 
 clean:
-rm -f build/*
+	rm -f build/*
 
 run: $(TARGET)
-./$(TARGET)
+	./$(TARGET)
 
 .PHONY: all clean run
