@@ -1,6 +1,9 @@
-# 3D Sandbox
+# Pulse
 
-A minimal 3D first-person sandbox environment built with C, OpenGL, and GLFW. Navigate through a simple 3D world with free camera movement.
+A minimal firstperson 3D game engine built in C, OpenGL, and GLFW.
+
+[screenshot](doc/screenshots/Screenshot%20From%202025-12-20%2008-18-51.png)
+
 
 ## Features
 
