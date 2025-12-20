@@ -2,7 +2,7 @@
 
 A minimal firstperson 3D game engine built in C, OpenGL, and GLFW.
 
-[screenshot](doc/screenshots/Screenshot%20From%202025-12-20%2008-18-51.png)
+![screenshot](doc/screenshots/3cubes.png)
 
 
 ## Features
