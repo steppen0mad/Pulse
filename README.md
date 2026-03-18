@@ -1,6 +1,6 @@
 # Pulse
 
-A minimal firstperson 3D game engine built in C, OpenGL, and GLFW.
+A minimal 3D game engine built in C, OpenGL, and GLFW.
 
 ![screenshot](doc/screenshots/3cubes.png)
 
