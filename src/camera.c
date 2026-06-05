@@ -6,7 +6,7 @@
 #endif
 
 void camera_init(Camera *c) {
-    c->yaw         = -90.0f;   /* face down -Z to start */
+    c->yaw         = -90.0f;   // face down -Z to start
     c->pitch       = 0.0f;
     c->sensitivity = 0.1f;
     c->lastX       = 0.0;
@@ -22,7 +22,7 @@ void camera_on_mouse(Camera *c, double xpos, double ypos) {
     }
 
     float xoffset = (float)(xpos - c->lastX);
-    float yoffset = (float)(c->lastY - ypos);   /* screen y grows downward */
+    float yoffset = (float)(c->lastY - ypos);   // screen y grows downward 
     c->lastX = xpos;
     c->lastY = ypos;
 
