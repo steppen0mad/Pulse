@@ -5,3 +5,6 @@ build/
 # editor / OS cruft
 *.swp
 .DS_Store
+
+memory/
+.plans/
