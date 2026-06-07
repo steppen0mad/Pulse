@@ -1,0 +1,12 @@
+# Python dependencies for the Pulse AI training stack.
+#
+#   python3 -m venv .venv && . .venv/bin/activate
+#   pip install -r training/requirements.txt
+#
+# torch is CPU-only here: the observation is a small float vector (not pixels),
+# so training is CPU-bound on the environment, and no GPU is required. For the
+# CPU wheel use the PyTorch CPU index:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+numpy>=1.26
+cffi>=1.16
+torch>=2.2
