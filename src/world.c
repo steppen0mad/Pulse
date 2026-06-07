@@ -23,4 +23,15 @@ void world_apply_input(PlayerState *s, const InputCmd *cmd, float dt) {
     if (cmd->buttons & BTN_RIGHT) { s->pos[0] -= sy * v; s->pos[2] += cy * v; }
     if (cmd->buttons & BTN_UP)    { s->pos[1] += v; }
     if (cmd->buttons & BTN_DOWN)  { s->pos[1] -= v; }
+
+    /* Clamp into the shared arena box. This lives in the deterministic step so
+     * client, server, and the training env all bound positions identically --
+     * a wall never causes a prediction/authority disagreement, and the policy
+     * sees the same reachable space in training and at deployment. */
+    if      (s->pos[0] >  ARENA_HALF_EXTENT) s->pos[0] =  ARENA_HALF_EXTENT;
+    else if (s->pos[0] < -ARENA_HALF_EXTENT) s->pos[0] = -ARENA_HALF_EXTENT;
+    if      (s->pos[2] >  ARENA_HALF_EXTENT) s->pos[2] =  ARENA_HALF_EXTENT;
+    else if (s->pos[2] < -ARENA_HALF_EXTENT) s->pos[2] = -ARENA_HALF_EXTENT;
+    if      (s->pos[1] >  ARENA_CEIL)        s->pos[1] =  ARENA_CEIL;
+    else if (s->pos[1] <  ARENA_FLOOR)       s->pos[1] =  ARENA_FLOOR;
 }

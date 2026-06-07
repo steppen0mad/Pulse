@@ -9,6 +9,8 @@
  */
 #include "net.h"
 #include "world.h"
+#include "agent.h"
+#include "policy.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +25,14 @@ typedef struct {
     Reliable           rel;
     PlayerState        state;
     uint32_t           last_input;   /* highest input seq we have applied */
+
+    /* AI agent layer. A CONTROLLER_NETWORK slot is an ordinary human (input
+     * arrives in packets). A CONTROLLER_AGENT slot has no peer: its input is
+     * produced locally each tick by `agent`. CONTROLLER_NETWORK == 0, so the
+     * existing memset on connect keeps humans correct. */
+    ControllerType     controller;
+    Agent              agent;
+    int                team;         /* is-enemy grouping (Phase 3); 0 by default */
 } Client;
 
 typedef struct { uint32_t id; uint8_t type; uint8_t player; } Event;
@@ -43,7 +53,32 @@ typedef struct {
 static Server         g;
 static volatile sig_atomic_t g_running = 1;
 
+/* AI agent layer state. g_world is a read-only view of the authoritative world
+ * that the observation builder reads each tick; its target[] and prev_pos[]
+ * persist across ticks (prev_pos drives velocity). */
+static World    g_world;
+static Policy  *g_policy     = NULL;   /* loaded weights, or NULL => stub agents */
+static int      g_frame_skip = 4;      /* decision cadence; policy header overrides */
+static uint32_t g_arena_rng  = 0x2545f491u;
+
+#define AGENT_REACH_RADIUS 1.5f
+
 static void on_sigint(int sig) { (void)sig; g_running = 0; }
+
+static float arena_frand(float lo, float hi) {
+    uint32_t x = g_arena_rng;
+    x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+    g_arena_rng = x;
+    return lo + (hi - lo) * ((float)(x >> 8) / (float)(1u << 24));
+}
+
+/* Pick a fresh navigation target inside the arena for an agent slot. */
+static void agent_pick_target(int slot) {
+    float m = ARENA_HALF_EXTENT * 0.9f;
+    g_world.target[slot][0] = arena_frand(-m, m);
+    g_world.target[slot][1] = EYE_HEIGHT;
+    g_world.target[slot][2] = arena_frand(-m, m);
+}
 
 static void nap_us(long us) {
     struct timespec ts = { us / 1000000L, (us % 1000000L) * 1000L };
@@ -69,6 +104,75 @@ static void push_event(uint8_t type, uint8_t player) {
         memmove(&g.recent[0], &g.recent[1], sizeof(Event) * (MAX_EVENTS_PER_PKT - 1));
         g.recent[MAX_EVENTS_PER_PKT - 1] = e;
     }
+}
+
+/* Spawn `n` AI agents into the first free slots. They occupy ordinary player
+ * slots, so humans see them via the unchanged snapshot/event path. */
+static void spawn_agents(int n, double now) {
+    AgentMode mode      = g_policy ? AGENT_POLICY : AGENT_STUB_RANDOM;
+    int       frameskip = g_policy ? g_policy->frame_skip : g_frame_skip;
+    int       spawned   = 0;
+
+    for (int i = 0; i < MAX_CLIENTS && spawned < n; i++) {
+        if (g.clients[i].in_use) continue;
+        memset(&g.clients[i], 0, sizeof(Client));
+        g.clients[i].in_use     = 1;
+        g.clients[i].controller = CONTROLLER_AGENT;
+        g.clients[i].team       = 0;
+        g.clients[i].state.pos[0] = (float)i * 2.0f - (float)MAX_CLIENTS;  /* spread out */
+        g.clients[i].state.pos[1] = EYE_HEIGHT;
+        g.clients[i].state.pos[2] = (float)(i % 5) * 2.0f;
+        g.clients[i].state.yaw    = -90.0f;
+        agent_init(&g.clients[i].agent, mode, g_policy, frameskip,
+                   g.clients[i].state.yaw, 0.0f, 0xA17E0000u ^ (uint32_t)(i + 1));
+
+        /* seed the persistent view for this slot */
+        g_world.present[i] = 1;
+        memcpy(g_world.prev_pos[i], g.clients[i].state.pos, sizeof(float) * 3);
+        agent_pick_target(i);
+
+        push_event(EV_PLAYER_JOIN, (uint8_t)i);
+        spawned++;
+    }
+    printf("[server] spawned %d agent(s) in %s mode (frame-skip %d)\n",
+           spawned, g_policy ? "policy" : "stub-random", frameskip);
+    (void)now;
+}
+
+/* Refresh the read-only world view from authoritative client state. Called at
+ * the top of each tick, BEFORE agents think. prev_pos/target persist. */
+static void world_view_refresh(void) {
+    g_world.dt = TICK_DT;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        g_world.present[i] = g.clients[i].in_use;
+        if (g.clients[i].in_use) {
+            g_world.players[i] = g.clients[i].state;
+            g_world.team[i]    = g.clients[i].team;
+        }
+    }
+}
+
+/* Drive every agent slot for one tick: choose/hold an action and apply it
+ * through the same world_apply_input a human input goes through. */
+static void drive_agents(void) {
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (!g.clients[i].in_use || g.clients[i].controller != CONTROLLER_AGENT)
+            continue;
+
+        /* navigation target cycling (used by a trained nav policy's obs) */
+        float dx = g_world.target[i][0] - g.clients[i].state.pos[0];
+        float dz = g_world.target[i][2] - g.clients[i].state.pos[2];
+        if (dx*dx + dz*dz < AGENT_REACH_RADIUS * AGENT_REACH_RADIUS)
+            agent_pick_target(i);
+
+        InputCmd cmd;
+        agent_think(&g.clients[i].agent, &g_world, i, &cmd);
+        world_apply_input(&g.clients[i].state, &cmd, TICK_DT);
+    }
+    /* prev_pos for next tick = this tick's start positions (from the view) */
+    for (int i = 0; i < MAX_CLIENTS; i++)
+        if (g.clients[i].in_use)
+            memcpy(g_world.prev_pos[i], g_world.players[i].pos, sizeof(float) * 3);
 }
 
 static void send_accept(int slot, double now) {
@@ -199,16 +303,31 @@ static void handle_packet(uint8_t *data, int len, const struct sockaddr_in *from
 }
 
 int main(int argc, char **argv) {
-    uint16_t port    = PULSE_DEFAULT_PORT;
-    float    loss    = 0.0f;
-    int      latency = 0;
+    uint16_t port        = PULSE_DEFAULT_PORT;
+    float    loss        = 0.0f;
+    int      latency     = 0;
+    int      n_bots      = 0;
+    const char *policy_path = NULL;
 
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--port") && i + 1 < argc)         port    = (uint16_t)atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--loss") && i + 1 < argc)    loss    = (float)atof(argv[++i]);
-        else if (!strcmp(argv[i], "--latency") && i + 1 < argc) latency = atoi(argv[++i]);
-        else { fprintf(stderr, "usage: %s [--port N] [--loss 0..1] [--latency MS]\n", argv[0]); return 2; }
+        if (!strcmp(argv[i], "--port") && i + 1 < argc)         port        = (uint16_t)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--loss") && i + 1 < argc)    loss        = (float)atof(argv[++i]);
+        else if (!strcmp(argv[i], "--latency") && i + 1 < argc) latency     = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--bots") && i + 1 < argc)    n_bots      = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--policy") && i + 1 < argc)  policy_path = argv[++i];
+        else if (!strcmp(argv[i], "--frame-skip") && i + 1 < argc) g_frame_skip = atoi(argv[++i]);
+        else {
+            fprintf(stderr,
+                "usage: %s [--port N] [--loss 0..1] [--latency MS]\n"
+                "          [--bots N] [--policy FILE] [--frame-skip K]\n", argv[0]);
+            return 2;
+        }
     }
+    if (n_bots < 0 || n_bots > MAX_CLIENTS) {
+        fprintf(stderr, "[server] --bots must be in 0..%d\n", MAX_CLIENTS);
+        return 2;
+    }
+    if (g_frame_skip < 1) { fprintf(stderr, "[server] --frame-skip must be >= 1\n"); return 2; }
 
     signal(SIGINT, on_sigint);
     srand((unsigned)time(NULL));
@@ -225,6 +344,16 @@ int main(int argc, char **argv) {
            port, TICK_RATE, SNAPSHOT_RATE);
     if (loss > 0.0f || latency > 0)
         printf("[server] simulating %.0f%% loss, %d ms latency\n", loss * 100.0f, latency);
+
+    /* Load policy weights (aborts loudly on a bad file -- never silently falls
+     * back to a stub) and spawn the requested agents. With --bots but no
+     * --policy, agents run the documented Phase-0 stub controller. */
+    if (policy_path) {
+        g_policy = policy_load(policy_path);
+        printf("[server] loaded policy '%s' (frame-skip %d)\n", policy_path, g_policy->frame_skip);
+    }
+    if (n_bots > 0)
+        spawn_agents(n_bots, now_seconds());
 
     double tick_time   = now_seconds();
     double last_status = tick_time;
@@ -245,16 +374,30 @@ int main(int argc, char **argv) {
             tick_time += (double)TICK_DT;
             g.tick++;
 
+            /* Time out only networked peers. Agents have no peer, so their
+             * rel.last_recv is frozen -- they must never be dropped here. */
             for (int i = 0; i < MAX_CLIENTS; i++)
-                if (g.clients[i].in_use && now - g.clients[i].rel.last_recv > CONNECT_TIMEOUT)
+                if (g.clients[i].in_use &&
+                    g.clients[i].controller == CONTROLLER_NETWORK &&
+                    now - g.clients[i].rel.last_recv > CONNECT_TIMEOUT)
                     drop_client(i);
 
+            /* Produce and apply agent input for this tick, through the same
+             * world_apply_input human input uses. Agents then land in snapshots
+             * exactly like humans. */
+            world_view_refresh();
+            drive_agents();
+
+            /* Snapshots and heartbeats go only to networked peers (agents have
+             * no addr to send to), but each snapshot still carries every player
+             * -- humans and agents alike. */
             if (g.tick % TICKS_PER_SNAPSHOT == 0) {
                 for (int i = 0; i < MAX_CLIENTS; i++)
-                    if (g.clients[i].in_use) send_snapshot(i, now);
+                    if (g.clients[i].in_use && g.clients[i].controller == CONTROLLER_NETWORK)
+                        send_snapshot(i, now);
             } else {
                 for (int i = 0; i < MAX_CLIENTS; i++)
-                    if (g.clients[i].in_use &&
+                    if (g.clients[i].in_use && g.clients[i].controller == CONTROLLER_NETWORK &&
                         now - g.clients[i].rel.last_send > HEARTBEAT_INTERVAL)
                         send_heartbeat(i, now);
             }

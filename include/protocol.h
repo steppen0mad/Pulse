@@ -18,7 +18,7 @@
 #define TICKS_PER_SNAPSHOT  (TICK_RATE / SNAPSHOT_RATE)   /* == 3 */
 #define TICK_DT             (1.0f / (float)TICK_RATE)      /* fixed timestep, seconds   */
 
-#define MAX_CLIENTS         8
+#define MAX_CLIENTS         32           /* humans + AI agents share these slots        */
 #define MAX_INPUTS_PER_PKT  32            /* redundant resend window (loss tolerance)   */
 #define MAX_EVENTS_PER_PKT  4             /* recent events piggybacked on each snapshot */
 #define INTERP_DELAY        0.100f        /* render remote players 100 ms in the past   */
@@ -43,7 +43,8 @@ enum {
     BTN_LEFT  = 1 << 2,
     BTN_RIGHT = 1 << 3,
     BTN_UP    = 1 << 4,
-    BTN_DOWN  = 1 << 5
+    BTN_DOWN  = 1 << 5,
+    BTN_FIRE  = 1 << 6    /* reserved for the combat phase; no effect in world.c yet */
 };
 
 /* discrete events (piggybacked on snapshots, deduped client-side by id) */
