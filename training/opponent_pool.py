@@ -21,7 +21,7 @@ class OpponentPool:
         """make_model() -> a fresh MultiDiscreteActorCritic with the right dims."""
         self._make = make_model
         self.capacity = capacity
-        self._snaps = []   # list of state_dicts (CPU)
+        self._snaps = []
 
     def __len__(self):
         return len(self._snaps)

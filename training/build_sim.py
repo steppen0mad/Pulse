@@ -21,7 +21,7 @@ from cffi import FFI
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
-import _sim_cdef as C  # noqa: E402
+import _sim_cdef as C
 
 
 def build():
@@ -36,7 +36,6 @@ def build():
         include_dirs=[str(ROOT / d) for d in C.INCLUDE_DIRS],
         extra_compile_args=C.EXTRA_COMPILE_ARGS,
     )
-    # Emit the .c/.o/.so into training/ so the import below and env.py find it.
     ffibuilder.compile(tmpdir=str(HERE), verbose=True)
 
 
@@ -68,6 +67,6 @@ def verify():
 
 
 if __name__ == "__main__":
-    os.chdir(ROOT)  # so relative source paths in any warning are readable
+    os.chdir(ROOT)
     build()
     verify()

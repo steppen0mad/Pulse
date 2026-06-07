@@ -6,9 +6,6 @@
 #endif
 
 void world_apply_input(PlayerState *s, const InputCmd *cmd, float dt) {
-    /* The server trusts the client's reported look orientation but stays
-     * authoritative over position -- position is integrated here from the
-     * button bitfield, so a client cannot teleport by lying about its pos. */
     s->yaw   = cmd->yaw;
     s->pitch = cmd->pitch;
 
@@ -24,10 +21,6 @@ void world_apply_input(PlayerState *s, const InputCmd *cmd, float dt) {
     if (cmd->buttons & BTN_UP)    { s->pos[1] += v; }
     if (cmd->buttons & BTN_DOWN)  { s->pos[1] -= v; }
 
-    /* Clamp into the shared arena box. This lives in the deterministic step so
-     * client, server, and the training env all bound positions identically --
-     * a wall never causes a prediction/authority disagreement, and the policy
-     * sees the same reachable space in training and at deployment. */
     if      (s->pos[0] >  ARENA_HALF_EXTENT) s->pos[0] =  ARENA_HALF_EXTENT;
     else if (s->pos[0] < -ARENA_HALF_EXTENT) s->pos[0] = -ARENA_HALF_EXTENT;
     if      (s->pos[2] >  ARENA_HALF_EXTENT) s->pos[2] =  ARENA_HALF_EXTENT;

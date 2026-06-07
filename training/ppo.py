@@ -45,7 +45,6 @@ class MultiDiscreteActorCritic(nn.Module):
             layer_init(nn.Linear(obs_dim, hidden)), nn.Tanh(),
             layer_init(nn.Linear(hidden, hidden)), nn.Tanh(),
         )
-        # small init on policy heads (stable start), unit init on value
         self.heads = nn.ModuleList(
             [layer_init(nn.Linear(hidden, n), std=0.01) for n in self.nvec])
         self.value = layer_init(nn.Linear(hidden, 1), std=1.0)
@@ -85,7 +84,6 @@ def parse_args():
     p.add_argument("--hidden", type=int, default=128)
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--out", default=None, help="checkpoint path (default checkpoints/<task>.pt)")
-    # self-play opponent pool (pursuit only)
     p.add_argument("--opponent-pool", action="store_true",
                    help="pursuit: play the evader against frozen past snapshots")
     p.add_argument("--pool-prob", type=float, default=0.5,
@@ -113,11 +111,9 @@ def main():
     agent = MultiDiscreteActorCritic(obs_dim, nvec, args.hidden).to(device)
     opt = torch.optim.Adam(agent.parameters(), lr=args.lr, eps=1e-5)
 
-    # opponent pool (Phase 3 stage 2). Only meaningful for pursuit, where the
-    # evader (odd env indices) can be driven by a frozen past snapshot.
     use_pool = args.opponent_pool and args.task == "pursuit"
     pool = None
-    opp_models = [None] * args.arenas      # per-arena frozen evader, or None (live)
+    opp_models = [None] * args.arenas
     if use_pool:
         from opponent_pool import OpponentPool, opponent_action
         pool = OpponentPool(lambda: MultiDiscreteActorCritic(obs_dim, nvec, args.hidden),
@@ -129,19 +125,17 @@ def main():
                              if (len(pool) > 0 and pool_rng.random() < args.pool_prob)
                              else None)
 
-    # rollout storage
     obs_buf = torch.zeros((T, N, obs_dim))
     act_buf = torch.zeros((T, N, n_heads), dtype=torch.long)
     logp_buf = torch.zeros((T, N))
     rew_buf = torch.zeros((T, N))
     done_buf = torch.zeros((T, N))
     val_buf = torch.zeros((T, N))
-    mask_buf = torch.ones((T, N))          # 1 = learner row, 0 = frozen opponent
+    mask_buf = torch.ones((T, N))
 
     next_obs = torch.tensor(env.reset(), dtype=torch.float32)
     next_done = torch.zeros(N)
 
-    # episodic-return tracking (env auto-resets, so we accumulate here)
     ep_ret = np.zeros(N, np.float32)
     recent_returns = []
 
@@ -161,7 +155,6 @@ def main():
 
             mask_row = torch.ones(N)
             if use_pool:
-                # override each frozen-opponent evader's action; mask it out of loss
                 for k in range(args.arenas):
                     if opp_models[k] is not None:
                         ev = k * env.apa + 1
@@ -179,15 +172,14 @@ def main():
             ep_ret += r
             for i in range(N):
                 if d[i]:
-                    if mask_row[i] > 0:           # only log learner episodes
+                    if mask_row[i] > 0:
                         recent_returns.append(float(ep_ret[i]))
                     ep_ret[i] = 0.0
-            if use_pool:                          # reassign opponents on arena reset
+            if use_pool:
                 for k in range(args.arenas):
                     if d[k * env.apa]:
                         assign_opponent(k)
 
-        # GAE
         with torch.no_grad():
             next_value = agent.get_value(next_obs)
             adv = torch.zeros((T, N))
@@ -204,7 +196,6 @@ def main():
                 adv[t] = lastgaelam
             ret = adv + val_buf
 
-        # flatten
         b_obs = obs_buf.reshape(-1, obs_dim)
         b_act = act_buf.reshape(-1, n_heads)
         b_logp = logp_buf.reshape(-1)
@@ -227,7 +218,6 @@ def main():
                     b_obs[mb], b_act[mb])
                 ratio = (newlogp - b_logp[mb]).exp()
 
-                # normalize advantages over learner rows only
                 mb_adv = b_adv[mb]
                 learner = mb_adv[mb_mask > 0]
                 if learner.numel() > 1:
@@ -238,7 +228,6 @@ def main():
                 pg = torch.max(pg1, pg2)
 
                 v = 0.5 * ((newval - b_ret[mb]) ** 2)
-                # masked means: frozen-opponent rows contribute zero gradient
                 pg_loss = (pg * mb_mask).sum() / denom
                 v_loss = (v * mb_mask).sum() / denom
                 ent_loss = (entropy * mb_mask).sum() / denom
@@ -258,7 +247,6 @@ def main():
               f"ep_ret(mean100) {mean_ret:7.2f} | n_ep {len(recent_returns):5d} | "
               f"v_loss {v_loss.item():.3f} | clipfrac {np.mean(clipfracs):.3f} | {sps} sps")
 
-    # save checkpoint with everything deploy parity needs
     CKPT_DIR.mkdir(exist_ok=True)
     out = Path(args.out) if args.out else CKPT_DIR / f"{args.task}.pt"
     torch.save({

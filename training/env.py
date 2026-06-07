@@ -35,7 +35,7 @@ except ImportError as e:
         "    python training/build_sim.py"
     ) from e
 
-import rewards as R  # noqa: E402
+import rewards as R
 
 ffi, lib = _pulse_sim.ffi, _pulse_sim.lib
 
@@ -46,7 +46,6 @@ TICK_DT   = 1.0 / float(lib.TICK_RATE)
 HALF      = float(lib.ARENA_HALF_EXTENT)
 EYE       = float(lib.EYE_HEIGHT)
 
-# episode caps (in env steps, i.e. decisions)
 NAV_MAX_STEPS = 300
 
 
@@ -75,30 +74,26 @@ class PulseVecEnv:
                 w.present[a] = 1
                 w.team[a] = a if task == "pursuit" else 0
 
-        # maintained orientation + per-agent episode bookkeeping (flat, num_envs)
         self.yaw       = np.zeros(self.num_envs, np.float32)
         self.pitch     = np.zeros(self.num_envs, np.float32)
-        self.prev_d    = np.zeros(self.num_envs, np.float32)   # navigation: dist to target
-        self.prev_range = np.zeros(self.num_envs, np.float32)  # pursuit: range to opponent
+        self.prev_d    = np.zeros(self.num_envs, np.float32)
+        self.prev_range = np.zeros(self.num_envs, np.float32)
         self.ep_step   = np.zeros(self.num_envs, np.int32)
         self.role     = ["pursuer" if (i % agents_per_arena) == 0 else "evader"
                          for i in range(self.num_envs)]
 
-        # reusable C scratch (avoid per-step allocation in the hot loop)
         self._heads  = ffi.new("int[]", NUM_HEADS)
         self._yawp   = ffi.new("float *")
         self._pitchp = ffi.new("float *")
         self._cmd    = ffi.new("InputCmd *")
         self._obs    = ffi.new("float[]", OBS_DIM)
 
-    # --- index helpers ---
     def _arena(self, env_idx):
         return self.worlds[env_idx // self.apa]
 
     def _slot(self, env_idx):
         return env_idx % self.apa
 
-    # --- spawn / reset ---
     def _spawn(self, env_idx):
         w = self._arena(env_idx)
         a = self._slot(env_idx)
@@ -118,7 +113,6 @@ class PulseVecEnv:
         self.ep_step[env_idx] = 0
 
         if self.task == "navigation":
-            # target at least 5 units away from spawn
             while True:
                 tx, tz = self.rng.uniform(-m, m, 2)
                 if _hdist(px, pz, tx, tz) >= 5.0:
@@ -157,15 +151,13 @@ class PulseVecEnv:
                 self._seed_pursuit_range(k)
         return np.stack([self._obs_for(i) for i in range(self.num_envs)])
 
-    # --- step ---
     def step(self, actions):
         actions = np.asarray(actions, dtype=np.int64)
         if actions.shape != (self.num_envs, NUM_HEADS):
             raise ValueError(
                 f"actions shape {actions.shape} != {(self.num_envs, NUM_HEADS)}")
 
-        # 1) decode each agent's action once (held across frame_skip ticks)
-        cmds = {}  # env_idx -> (buttons, yaw, pitch) materialized in an InputCmd
+        cmds = {}
         for i in range(self.num_envs):
             for h in range(NUM_HEADS):
                 self._heads[h] = int(actions[i, h])
@@ -176,9 +168,6 @@ class PulseVecEnv:
             self.pitch[i] = self._pitchp[0]
             cmds[i] = (self._cmd.buttons, self._cmd.yaw, self._cmd.pitch)
 
-        # 2) advance every arena frame_skip ticks, holding the decoded action.
-        #    On the last sub-tick, snapshot pre-positions so build_observation
-        #    derives velocity over exactly one tick -- matching the server.
         for t in range(self.frame_skip):
             last = (t == self.frame_skip - 1)
             pre = {}
@@ -199,12 +188,10 @@ class PulseVecEnv:
                     a = self._slot(i)
                     w.prev_pos[a][0], w.prev_pos[a][1], w.prev_pos[a][2] = pre[i]
 
-        # 3) rewards + termination
         rew = np.zeros(self.num_envs, np.float32)
         done = np.zeros(self.num_envs, np.float32)
         self.ep_step += 1
 
-        # the shared clamp must keep everyone in-arena; otherwise it's a bug
         for i in range(self.num_envs):
             w = self._arena(i); a = self._slot(i)
             px, pz = w.players[a].pos[0], w.players[a].pos[2]
@@ -222,7 +209,7 @@ class PulseVecEnv:
                 self.prev_d[i] = d
                 if reached or self.ep_step[i] >= NAV_MAX_STEPS:
                     done[i] = 1.0
-        else:  # pursuit/evasion: slot 0 is the pursuer, slot 1 the evader
+        else:
             for k in range(self.num_arenas):
                 i0 = k * self.apa
                 i1 = i0 + 1
@@ -237,13 +224,12 @@ class PulseVecEnv:
                 if tagged or timed:
                     done[i0] = done[i1] = 1.0
 
-        # 4) auto-reset done agents, then build the next observation
         obs = np.empty((self.num_envs, OBS_DIM), np.float32)
         for i in range(self.num_envs):
             if done[i]:
                 self._spawn(i)
             obs[i] = self._obs_for(i)
-        if self.task == "pursuit":      # reseed range after both agents respawn
+        if self.task == "pursuit":
             for k in range(self.num_arenas):
                 if done[k * self.apa]:
                     self._seed_pursuit_range(k)
@@ -253,15 +239,11 @@ class PulseVecEnv:
 
 
 if __name__ == "__main__":
-    # smoke test: shapes, finiteness, and that an agent can be rewarded for
-    # moving toward its target.
     env = PulseVecEnv(num_arenas=4, agents_per_arena=1, frame_skip=4, seed=0)
     o = env.reset()
     assert o.shape == (env.num_envs, OBS_DIM), o.shape
     total = 0.0
     for _ in range(200):
-        # heuristic: always push forward + small random turn, to confirm the
-        # progress reward is non-trivial when moving
         acts = np.tile([1, 2, 0, 2, 1, 0], (env.num_envs, 1))
         o, r, d, _ = env.step(acts)
         assert o.shape == (env.num_envs, OBS_DIM)

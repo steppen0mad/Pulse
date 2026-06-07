@@ -1,15 +1,3 @@
-/*
- * Integration test for the AI agent layer end to end.
- *
- *   1. Determinism + bounds: a headless rollout of stub agents, driven by the
- *      real agent_think + world_apply_input, stays inside the arena every tick
- *      and is bit-for-bit reproducible from a fixed seed.
- *   2. A real localhost client connects to a server populated with agents and
- *      decodes their positions out of ordinary snapshots -- exercising the same
- *      wire path the GL client uses, proving agents are "just players."
- *
- * Headless, deterministic, non-zero exit on any failed assertion.
- */
 #include "net.h"
 #include "world.h"
 #include "agent.h"
@@ -38,7 +26,6 @@ static int in_bounds(const float p[3]) {
            p[1] >= ARENA_FLOOR - e        && p[1] <= ARENA_CEIL + e;
 }
 
-/* ---- a small reusable agent rollout that mirrors the server's drive loop ---- */
 typedef struct {
     World        world;
     PlayerState  state[MAX_CLIENTS];
@@ -62,7 +49,6 @@ static void rollout_init(Rollout *r, int n, uint32_t seed_base) {
     }
 }
 
-/* advance one tick; returns 0 ok, 1 if any agent left the arena */
 static int rollout_tick(Rollout *r) {
     r->world.dt = TICK_DT;
     for (int i = 0; i < r->n; i++) r->world.players[i] = r->state[i];
@@ -82,11 +68,10 @@ static int test_determinism_and_bounds(void) {
     rollout_init(&a, N_AGENTS, 0xABCD1234u);
     rollout_init(&b, N_AGENTS, 0xABCD1234u);
 
-    for (int t = 0; t < 1800; t++) {           /* 30 s at 60 Hz */
-        CHECK(rollout_tick(&a) == 0);           /* never leaves the arena */
+    for (int t = 0; t < 1800; t++) {
+        CHECK(rollout_tick(&a) == 0);
         CHECK(rollout_tick(&b) == 0);
     }
-    /* identical seed -> identical trajectories, bit for bit */
     for (int i = 0; i < N_AGENTS; i++)
         for (int k = 0; k < 3; k++)
             CHECK(a.state[i].pos[k] == b.state[i].pos[k]);
@@ -94,7 +79,6 @@ static int test_determinism_and_bounds(void) {
     return 0;
 }
 
-/* ---- a minimal server that drives agents and snapshots them to one client ---- */
 typedef struct {
     UdpSocket          sock;
     Reliable           rel;
@@ -109,7 +93,7 @@ static void mini_send_snapshot(MiniServer *s, double now) {
     uint8_t buf[MAX_PACKET];
     ByteBuf b = buf_writer(buf, sizeof buf);
     net_write_header(&b, &s->rel, PKT_SNAPSHOT, 0, now);
-    wr_u32(&b, 0);                               /* last_input (client unused here) */
+    wr_u32(&b, 0);
     int count = s->roll.n + (s->have_client ? 1 : 0);
     wr_u8(&b, (uint8_t)count);
     for (int i = 0; i < s->roll.n; i++) {
@@ -120,12 +104,12 @@ static void mini_send_snapshot(MiniServer *s, double now) {
         wr_f32(&b, s->roll.state[i].yaw);
         wr_f32(&b, s->roll.state[i].pitch);
     }
-    if (s->have_client) {                        /* the human's own slot */
+    if (s->have_client) {
         wr_u8 (&b, (uint8_t)s->client_slot);
         wr_f32(&b, 0.0f); wr_f32(&b, EYE_HEIGHT); wr_f32(&b, 0.0f);
         wr_f32(&b, 0.0f); wr_f32(&b, 0.0f);
     }
-    wr_u8(&b, 0);                                /* no events */
+    wr_u8(&b, 0);
     net_send(&s->sock, &s->client, buf, b.pos, now);
 }
 
@@ -172,7 +156,6 @@ static int test_client_sees_agents(void) {
         net_update(&srv.sock, now);
         net_update(&csock, now);
 
-        /* client handshake */
         if (my_id < 0 && (tick % 15 == 0)) {
             uint8_t cb[MAX_PACKET];
             ByteBuf w = buf_writer(cb, sizeof cb);
@@ -182,7 +165,6 @@ static int test_client_sees_agents(void) {
 
         mini_server_recv(&srv, now);
 
-        /* server: advance agents + assert bounds, snapshot at 20 Hz */
         srv.roll.world.dt = TICK_DT;
         for (int i = 0; i < srv.roll.n; i++) srv.roll.world.players[i] = srv.roll.state[i];
         for (int i = 0; i < srv.roll.n; i++) {
@@ -195,7 +177,6 @@ static int test_client_sees_agents(void) {
             memcpy(srv.roll.world.prev_pos[i], srv.roll.world.players[i].pos, sizeof(float) * 3);
         if (tick % TICKS_PER_SNAPSHOT == 0) mini_send_snapshot(&srv, now);
 
-        /* client: drain, parse snapshots */
         struct sockaddr_in from;
         uint8_t buf[MAX_PACKET];
         int n;
@@ -229,11 +210,11 @@ static int test_client_sees_agents(void) {
     net_close(&srv.sock);
     net_close(&csock);
 
-    CHECK(my_id == N_AGENTS);          /* client got the slot after the agents */
-    CHECK(snapshots > 10);             /* snapshots actually flowed             */
-    CHECK(parse_failures == 0);        /* every snapshot decoded cleanly        */
-    CHECK(max_players == N_AGENTS);    /* the client saw all agents             */
-    CHECK(oob == 0);                   /* nobody ever left the arena            */
+    CHECK(my_id == N_AGENTS);
+    CHECK(snapshots > 10);
+    CHECK(parse_failures == 0);
+    CHECK(max_players == N_AGENTS);
+    CHECK(oob == 0);
     printf("  real localhost client decoded %d agents over %d snapshots, all in-bounds ... ok\n",
            max_players, snapshots);
     return 0;
