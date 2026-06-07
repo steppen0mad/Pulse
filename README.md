@@ -1,102 +1,110 @@
 # Pulse
 
-A minimal 3D game engine built in C, OpenGL, and GLFW.
+An **AI behaviour simulation that humans share**. Pulse is a first-person
+multiplayer sandbox built on a hand-rolled UDP netcode layer, extended so that
+neural-network agents and real humans inhabit the *same* authoritative world.
+The agents are trained offline with self-play reinforcement learning (PPO), and
+their policy runs as hand-written C inference inside the 60 Hz server tick — no
+runtime ML dependency.
 
-![screenshot](doc/screenshots/3cubes.png)
+The whole design turns on one idea: **an agent is just another player whose input
+is produced locally instead of arriving in a packet.** Because an agent emits an
+ordinary input command and occupies an ordinary player slot, the wire protocol,
+snapshots, and the entire client are untouched — a human who joins sees bots as
+ordinary remote players, and multiple humans can join at once to interact with
+them.
 
+```
+            ┌─────────── authoritative 60 Hz server ───────────┐
+ humans ───►│  network slots ─┐                                │
+ (UDP in)   │                 ├─► world_apply_input ─► snapshot │──► all clients
+ agents ───►│  agent slots  ──┘     (one shared sim)     20 Hz  │     (20 Hz)
+ (policy)   │   obs → policy → action ─┘                        │
+            └──────────────────────────────────────────────────┘
+```
 
-## Features
+## Two layers, two design docs
 
-- **First-person camera control** with mouse look
-- **Free movement** in all directions (WASD + Space/Shift)
-- **OpenGL rendering** with immediate mode graphics
-- **Grid floor** for spatial reference
-- **Colored cubes** as environment objects
+| Layer | What it does | Doc |
+|-------|--------------|-----|
+| **Netcode** | raw-UDP transport with seq/ack/ack_bits, client prediction, server reconciliation, interpolation | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| **AI agent layer** | shared observation builder, multi-discrete policy, hand-written C inference, offline PPO + self-play | [`doc/AI_LAYER.md`](doc/AI_LAYER.md) |
 
-## Controls
+## Build & run
 
-| Input | Action |
-|-------|--------|
-| `W` `A` `S` `D` | Move forward/left/backward/right |
-| `Space` | Move up |
-| `Left Shift` | Move down |
-| `Mouse` | Look around (first-person) |
-| `ESC` | Exit |
-
-## Requirements
-
-- **GLFW 3.3+** - Window and input handling
-- **OpenGL 4.5+** - Graphics rendering (Mesa compatible)
-- **GLU** - OpenGL utility functions
-- **GCC** - C compiler with C11 support
-
-## Installation
-
-### Ubuntu/Debian
+Requires GCC, GLFW3, OpenGL/GLU (client only; the server and all tests are
+graphics-free and CI-friendly).
 
 ```bash
-sudo apt update
-sudo apt install -y libglfw3 libglfw3-dev libgl1-mesa-dev libglu1-mesa-dev mesa-utils
+sudo apt install -y libglfw3 libglfw3-dev libgl1-mesa-dev libglu1-mesa-dev
+
+make                 # builds build/server, build/client, and the test binaries
+make test            # runs the full headless test suite (no GPU/display needed)
 ```
 
-### Build from source
+### A human sharing the world with bots
 
 ```bash
-git clone <repository-url>
-cd sandbox
-gcc -Wall -Wextra -std=gnu11 -Iinclude `pkg-config --cflags glfw3` src/main.c -o build/sandbox `pkg-config --libs glfw3` -lGL -lGLU -lm
+# stub bots that wander (Phase 0 — needs no trained policy):
+./build/server --bots 5
+# or a trained navigation policy:
+./build/server --bots 5 --policy training/checkpoints/policy.bin
+
+# then connect one or more human clients (each is an ordinary player):
+./build/client 127.0.0.1
 ```
 
-## Usage
+Add `--loss 0.15 --latency 100` to the server or client to demo prediction,
+reconciliation, and interpolation holding up over a deliberately bad link.
+
+## Training a policy
 
 ```bash
-./build/sandbox
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r training/requirements.txt
+
+make sim-lib         # compile the C sim+perception into a cffi extension
+make train           # PPO navigation (CPU); episodic return climbs to ~27
+make export          # PyTorch weights -> policy.bin + refresh C parity fixtures
+make parity          # assert the C forward pass matches PyTorch within 1e-4
 ```
 
-## Project Structure
+Self-play (pursuit/evasion):
 
-```
-sandbox/
-├── src/          # Source files
-│   └── main.c    # Main application entry point
-├── include/      # Header files (for future expansion)
-├── build/        # Compiled binaries
-├── Makefile      # Build configuration
-└── README.md     # Documentation
+```bash
+python training/ppo.py --task pursuit --arenas 8 --agents-per-arena 2 \
+                       --opponent-pool
 ```
 
-## Technical Details
+## Why it is correct: train/deploy parity
 
-- **Language**: C (GNU11)
-- **Graphics API**: OpenGL 4.5 (Compatibility Profile)
-- **Window/Input**: GLFW 3.3
-- **Rendering**: Immediate mode (legacy OpenGL for simplicity)
+The training environment and the live server compile the **same** C sources —
+`world.c` (the deterministic step) and `agent_obs.c` (the observation builder and
+action decoder). Training calls them through cffi; the server calls them
+directly. There is therefore no second implementation of the world or the
+perception to drift out of sync. Concretely:
 
-## Development
+- the C policy forward pass matches PyTorch to **3.8e-6** (tolerance 1e-4),
+- a corrupt weights file **aborts loudly** rather than silently degrading,
+- frame-skip is baked into `policy.bin` so deployment decides at the trained
+  cadence, and a stale observation layout is rejected at load.
 
-The project uses a straightforward architecture:
-- Camera system with yaw/pitch orientation
-- Delta-time based movement for frame-independent speed
-- Mouse input captured for seamless look control
+## Numbers
 
-## Known Issues
+| Metric | Value |
+|--------|-------|
+| Per-agent decision cost (obs + forward + decode) | ~16–19 µs |
+| Agents fitting one 60 Hz tick (full budget) | ~900–1000 |
+| C-vs-PyTorch logit parity (max abs diff) | 3.8e-6 |
+| Navigation PPO episodic return | −2.9 → ~27 |
+| Netcode convergence under 40% loss / 60 ms | exact (gap 0.00000) |
 
-- Runs on software renderer (llvmpipe) in WSL2 without GPU passthrough
-- Uses legacy immediate mode OpenGL (not modern shader-based pipeline)
+## Layout
 
-## Future Enhancements
-
-- [ ] Modern OpenGL shader pipeline
-- [ ] Texture support
-- [ ] Collision detection
-- [ ] Block placement/removal (voxel editing)
-- [ ] Lighting system
-- [ ] Multiple terrain types
-
-## License
-
-MIT License - See LICENSE file for details
-
-## Contributing
-
-Contributions welcome! Open an issue or submit a pull request.
+```
+include/   protocol, serialize, net, world, camera, agent, policy headers
+src/       net.c world.c server.c client.c camera.c   (netcode + sim + render)
+           agent_obs.c  agent.c  policy.c             (the AI agent layer)
+training/  build_sim.py env.py ppo.py rewards.py export.py opponent_pool.py
+tests/     reliability, loopback, obs, policy parity, agent loopback, benchmark
+```
