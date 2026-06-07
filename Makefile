@@ -31,7 +31,26 @@ CORE   := src/net.c src/world.c
 # observation/decode unit (also compiled into the training .so via cffi).
 AI     := src/agent.c src/policy.c src/agent_obs.c
 
-.PHONY: all server client tests test run-server run-client clean
+.PHONY: all server client tests test run-server run-client clean sim-lib train export parity
+
+# ---- AI training workflow (requires the Python venv: numpy, cffi, torch) ----
+PYTHON ?= python
+
+# Compile the C sim+perception into the cffi extension the training env imports.
+sim-lib:
+	$(PYTHON) training/build_sim.py
+
+# Train a policy (navigation by default). Long-running; see training/ppo.py args.
+train: sim-lib
+	$(PYTHON) training/ppo.py
+
+# Export the trained PyTorch policy to policy.bin + refresh the C parity fixtures.
+export:
+	$(PYTHON) training/export.py
+
+# Regenerate fixtures and run the C parity test against them.
+parity: export tests
+	@$(BUILD)/test_policy
 
 all: server client tests
 
@@ -48,6 +67,7 @@ tests: | $(BUILD)
 	$(CC) $(CFLAGS) tests/test_reliability.c $(CORE) -o $(BUILD)/test_reliability -lm
 	$(CC) $(CFLAGS) tests/test_loopback.c    $(CORE) -o $(BUILD)/test_loopback    -lm
 	$(CC) $(CFLAGS) tests/test_obs.c src/agent_obs.c -o $(BUILD)/test_obs -lm
+	$(CC) $(CFLAGS) tests/test_policy.c src/policy.c src/agent_obs.c -o $(BUILD)/test_policy -lm
 	$(CC) $(CFLAGS) tests/test_loopback_agents.c $(CORE) $(AI) -o $(BUILD)/test_loopback_agents -lm
 	$(CC) $(CFLAGS) tests/bench_agent.c src/agent_obs.c src/policy.c -o $(BUILD)/bench_agent -lm
 
@@ -60,6 +80,9 @@ test: tests
 	@echo
 	@echo "== observation + decode unit tests =="
 	@$(BUILD)/test_obs
+	@echo
+	@echo "== C-vs-PyTorch policy parity tests =="
+	@$(BUILD)/test_policy
 	@echo
 	@echo "== agent layer integration tests =="
 	@$(BUILD)/test_loopback_agents

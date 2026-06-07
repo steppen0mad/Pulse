@@ -8,5 +8,17 @@ build/
 *.swp
 .DS_Store
 
+# python / training artifacts (the cffi extension and weights are generated;
+# the parity fixtures under tests/data/ ARE committed so `make test` needs no Python)
+.venv/
+__pycache__/
+*.pyc
+training/_pulse_sim*.so
+training/_pulse_sim.c
+training/_pulse_sim.o
+training/checkpoints/
+*.bin
+!tests/data/*.bin
+
 memory/
 .plans/
