@@ -1,12 +1,3 @@
-/*
- * Microbenchmark: the per-agent cost of one decision = build_observation +
- * policy_forward + policy_argmax_decode. This substantiates "running inference
- * inside the 16 ms tick": it reports the median per-agent time and the number of
- * agents that fit in one tick with headroom.
- *
- * Not a pass/fail gate by default (timing is machine-dependent), but it asserts
- * a generous ceiling so an accidental O(n^2) regression is still caught.
- */
 #include "agent.h"
 #include "policy.h"
 
@@ -16,13 +7,11 @@
 #include <time.h>
 
 static uint32_t rng = 0x1234567u;
-static float frand_unit(void) {            /* deterministic [-1,1) */
+static float frand_unit(void) {
     rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
     return ((float)(rng >> 8) / (float)(1u << 24)) * 2.0f - 1.0f;
 }
 
-/* Build an in-memory Policy with random weights, matching policy_load's layout,
- * so the benchmark needs no exported file. */
 static Policy *make_random_policy(void) {
     size_t total = 0;
     total += (size_t)POLICY_HIDDEN * OBS_DIM      + POLICY_HIDDEN;
@@ -62,7 +51,6 @@ static int cmp_double(const void *a, const void *b) {
 }
 
 int main(void) {
-    /* a busy world: a full slate of players so K-nearest does real work */
     World w; memset(&w, 0, sizeof w);
     w.dt = TICK_DT;
     for (int i = 0; i < 8; i++) {
@@ -102,7 +90,7 @@ int main(void) {
     qsort(per_agent_ns, BATCHES, sizeof(double), cmp_double);
     double median_ns = per_agent_ns[BATCHES / 2];
     double per_agent_us = median_ns / 1000.0;
-    double tick_budget_us = 1000000.0 / (double)TICK_RATE;   /* ~16667 us */
+    double tick_budget_us = 1000000.0 / (double)TICK_RATE;
     int    fit = (int)(tick_budget_us / per_agent_us);
 
     printf("agent decision microbenchmark (build_obs + forward + decode):\n");

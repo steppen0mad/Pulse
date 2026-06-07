@@ -45,10 +45,10 @@ def assert_exportable(model):
 
 
 def write_linear(buf, linear):
-    w = linear.weight.detach().cpu().numpy().astype("<f4")   # (out, in) row-major
-    b = linear.bias.detach().cpu().numpy().astype("<f4")     # (out,)
+    w = linear.weight.detach().cpu().numpy().astype("<f4")
+    b = linear.bias.detach().cpu().numpy().astype("<f4")
     assert w.ndim == 2 and b.shape[0] == w.shape[0]
-    buf += w.tobytes()      # NO transpose: row o is output neuron o, matches C
+    buf += w.tobytes()
     buf += b.tobytes()
 
 
@@ -60,20 +60,20 @@ def export_policy_bin(model, frame_skip, obs_version, path):
 
     head = bytearray()
     head += MAGIC
-    head += struct.pack("<i", 1)             # version
+    head += struct.pack("<i", 1)
     head += struct.pack("<i", obs_dim)
-    head += struct.pack("<i", 2)             # n_hidden
+    head += struct.pack("<i", 2)
     head += struct.pack("<i", hidden)
-    head += struct.pack("<i", len(nvec))     # num_heads
+    head += struct.pack("<i", len(nvec))
     for n in nvec:
         head += struct.pack("<i", n)
     head += struct.pack("<i", frame_skip)
     head += struct.pack("<I", obs_version)
 
     body = bytearray()
-    write_linear(body, model.trunk[0])       # hidden[0]: obs -> hidden
-    write_linear(body, model.trunk[2])       # hidden[1]: hidden -> hidden
-    for h in range(len(nvec)):               # heads (value head intentionally omitted)
+    write_linear(body, model.trunk[0])
+    write_linear(body, model.trunk[2])
+    for h in range(len(nvec)):
         write_linear(body, model.heads[h])
 
     Path(path).write_bytes(bytes(head) + bytes(body))
@@ -83,7 +83,7 @@ def export_policy_bin(model, frame_skip, obs_version, path):
 def export_parity_io(model, obs_dim, n_samples, path, seed=12345):
     rng = np.random.default_rng(seed)
     obs = rng.uniform(-1.0, 1.0, size=(n_samples, obs_dim)).astype(np.float32)
-    obs[0] = 0.0                              # include the all-zero edge case
+    obs[0] = 0.0
     with torch.no_grad():
         h = model.trunk(torch.tensor(obs))
         logits = torch.cat([head(h) for head in model.heads], dim=-1).numpy().astype(np.float32)

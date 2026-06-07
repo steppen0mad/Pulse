@@ -5,21 +5,12 @@
 #include <string.h>
 #include <assert.h>
 
-/*
- * Tiny little-endian cursor over a byte buffer.
- *
- * Writers assert on overflow -- our outbound buffers are sized for the worst
- * case, so an overflow is a programming bug and must blow up loudly, not be
- * silently truncated. Readers operate on untrusted network data, so they
- * bounds-check and set `ok = 0` on underflow; callers must check `ok` before
- * trusting the decoded values.
- */
 
 typedef struct {
     uint8_t *data;
     int      cap;
     int      pos;
-    int      ok;    /* cleared by a read that ran past the end */
+    int      ok;
 } ByteBuf;
 
 static inline ByteBuf buf_writer(uint8_t *data, int cap) {
@@ -53,7 +44,7 @@ static inline void wr_u32(ByteBuf *b, uint32_t v) {
 
 static inline void wr_f32(ByteBuf *b, float v) {
     uint32_t u;
-    memcpy(&u, &v, sizeof u);   /* type-pun via memcpy: no aliasing UB */
+    memcpy(&u, &v, sizeof u);
     wr_u32(b, u);
 }
 
@@ -87,4 +78,4 @@ static inline float rd_f32(ByteBuf *b) {
     return v;
 }
 
-#endif /* PULSE_SERIALIZE_H */
+#endif

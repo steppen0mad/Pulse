@@ -1,19 +1,3 @@
-/*
- * Standalone network test harness.
- *
- * Stands up a miniature server and client that talk over REAL localhost UDP
- * sockets using the real net/reliability/simulation code, then injects packet
- * loss and latency and checks the netcode's guarantees end to end:
- *
- *   1. Inputs survive loss   -- with redundant resends, the server's
- *      authoritative state still advances under heavy packet loss.
- *   2. Reconciliation converges -- after input stops, the client's predicted
- *      state ends up bit-for-bit on top of the server's authoritative state,
- *      because it snaps to authority and replays only its unacked inputs.
- *
- * Headless and deterministic (fixed RNG seed, simulated clock). Non-zero exit
- * on any failed assertion.
- */
 #include "net.h"
 #include "world.h"
 
@@ -25,7 +9,6 @@
 #define TEST_PORT   42500
 #define PENDING_MAX 256
 
-/* ---- a self-contained client, mirroring src/client.c's netcode ---- */
 typedef struct {
     UdpSocket          sock;
     Reliable           rel;
@@ -36,7 +19,6 @@ typedef struct {
     int                pending_count;
 } TestClient;
 
-/* ---- a self-contained single-client server, mirroring src/server.c ---- */
 typedef struct {
     UdpSocket          sock;
     Reliable           rel;
@@ -90,14 +72,14 @@ static void server_send_snapshot(TestServer *s, double now) {
     ByteBuf b = buf_writer(buf, sizeof buf);
     net_write_header(&b, &s->rel, PKT_SNAPSHOT, 0, now);
     wr_u32(&b, s->last_input);
-    wr_u8 (&b, 1);                       /* one player */
+    wr_u8 (&b, 1);
     wr_u8 (&b, 0);
     wr_f32(&b, s->state.pos[0]);
     wr_f32(&b, s->state.pos[1]);
     wr_f32(&b, s->state.pos[2]);
     wr_f32(&b, s->state.yaw);
     wr_f32(&b, s->state.pitch);
-    wr_u8 (&b, 0);                       /* no events */
+    wr_u8 (&b, 0);
     net_send(&s->sock, &s->client, buf, b.pos, now);
 }
 
@@ -157,8 +139,6 @@ static void client_recv(TestClient *c, double now) {
     }
 }
 
-/* Run one scenario; report how far apart client and server ended up, and how
- * far the server actually moved. Returns 0 on success. */
 static int run_scenario(const char *name, float loss, int latency_ms,
                         float *out_divergence, float *out_displacement) {
     TestServer srv;
@@ -175,21 +155,19 @@ static int run_scenario(const char *name, float loss, int latency_ms,
 
     cli.server.sin_family      = AF_INET;
     cli.server.sin_port        = htons(TEST_PORT);
-    cli.server.sin_addr.s_addr = htonl(0x7f000001);   /* 127.0.0.1 */
+    cli.server.sin_addr.s_addr = htonl(0x7f000001);
 
-    const int   MOVE_TICKS  = 600;    /* 10 s of holding "forward" */
-    const int   COAST_TICKS = 600;    /* 10 s of no input, to let things settle */
+    const int   MOVE_TICKS  = 600;
+    const int   COAST_TICKS = 600;
     const int   TOTAL       = MOVE_TICKS + COAST_TICKS;
-    double      now         = 1.0;    /* simulated clock */
+    double      now         = 1.0;
 
     for (int tick = 0; tick < TOTAL; tick++) {
         now += (double)TICK_DT;
 
-        /* release any packets whose simulated latency has elapsed */
         net_update(&srv.sock, now);
         net_update(&cli.sock, now);
 
-        /* client: sample input, predict, send the redundant window */
         InputCmd cmd;
         cmd.seq     = ++cli.input_seq;
         cmd.buttons = (tick < MOVE_TICKS) ? BTN_FWD : 0;
@@ -203,16 +181,13 @@ static int run_scenario(const char *name, float loss, int latency_ms,
         cli.pending[cli.pending_count++] = cmd;
         client_send_inputs(&cli, now);
 
-        /* server: consume inputs, broadcast a snapshot every 3rd tick (20 Hz) */
         server_recv(&srv, now);
         if (tick % TICKS_PER_SNAPSHOT == 0)
             server_send_snapshot(&srv, now);
 
-        /* client: apply snapshots -> reconcile */
         client_recv(&cli, now);
     }
 
-    /* drain the tail: flush + deliver everything still in flight, settle */
     for (int i = 0; i < 200; i++) {
         now += (double)TICK_DT;
         net_update(&srv.sock, now);
@@ -223,7 +198,7 @@ static int run_scenario(const char *name, float loss, int latency_ms,
     }
 
     *out_divergence   = dist3(cli.self.pos, srv.state.pos);
-    *out_displacement = fabsf(srv.state.pos[0]);   /* moved along +X (yaw 0) */
+    *out_displacement = fabsf(srv.state.pos[0]);
 
     printf("  %-22s loss %2.0f%% lat %3dms | server moved %.2f, client-server gap %.5f"
            " | RTT %.0fms loss-est %.0f%%\n",
@@ -237,7 +212,7 @@ static int run_scenario(const char *name, float loss, int latency_ms,
 }
 
 int main(void) {
-    srand(1234);   /* deterministic loss pattern */
+    srand(1234);
     printf("loopback netcode tests (real localhost UDP):\n");
 
     struct { const char *name; float loss; int lat; } scenarios[] = {
@@ -253,14 +228,10 @@ int main(void) {
         if (run_scenario(scenarios[i].name, scenarios[i].loss, scenarios[i].lat, &div, &disp))
             return 1;
 
-        /* Inputs got through: the server actually advanced a meaningful amount
-         * (10 s * 5 u/s == ~50 units of intended travel). */
         if (disp < 5.0f) {
             fprintf(stderr, "FAIL: server barely moved (%.2f) -- inputs not arriving\n", disp);
             failures++;
         }
-        /* Reconciliation converged: after coasting, prediction sits on top of
-         * authority regardless of how bad the link was. */
         if (div > 0.01f) {
             fprintf(stderr, "FAIL: client did not converge to server (gap %.5f)\n", div);
             failures++;

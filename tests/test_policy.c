@@ -1,17 +1,3 @@
-/*
- * Differential parity test: the hand-written C forward pass (src/policy.c) must
- * match the PyTorch reference within a float tolerance. training/export.py emits
- * the model (policy_ref.bin) and a set of random observations with their
- * reference logits (policy_ref_io.bin); this test runs every observation through
- * the C path and asserts the logits agree to 1e-4 and the per-head argmax is
- * identical. This is the analog of the loopback convergence test: it proves the
- * deployed implementation matches the trusted reference.
- *
- * It also verifies the no-fallback contract: loading a corrupt weights file must
- * abort the process (checked by forking a child).
- *
- * Run from the repo root (the Makefile does); fixtures live in tests/data/.
- */
 #include "policy.h"
 #include "agent.h"
 
@@ -38,7 +24,7 @@ static int tests_run = 0;
 static int read_exact(FILE *f, void *p, size_t n) { return fread(p, 1, n, f) == n; }
 
 static int test_parity(void) {
-    Policy *p = policy_load(MODEL_PATH);   /* aborts loudly if missing/bad */
+    Policy *p = policy_load(MODEL_PATH);
 
     FILE *f = fopen(IO_PATH, "rb");
     CHECK(f != NULL);
@@ -83,31 +69,27 @@ static int test_parity(void) {
     return 0;
 }
 
-/* The no-fallback contract: a corrupt weights file must abort, not load. We
- * cannot catch abort()/exit() in-process, so fork a child that attempts the
- * load and assert it exits non-zero. */
 static int test_bad_file_aborts(void) {
     const char *bad = "tests/data/_bad_policy.tmp";
     FILE *f = fopen(bad, "wb");
     CHECK(f != NULL);
-    fwrite("PPO", 1, 3, f);            /* truncated: valid prefix, nothing else */
+    fwrite("PPO", 1, 3, f);
     fclose(f);
 
-    fflush(stdout);                    /* don't let the child re-flush our buffer */
+    fflush(stdout);
     pid_t pid = fork();
     CHECK(pid >= 0);
     if (pid == 0) {
-        /* silence the expected error message in the child */
         if (!freopen("/dev/null", "w", stderr)) _exit(2);
-        Policy *p = policy_load(bad);  /* must NOT return */
+        Policy *p = policy_load(bad);
         (void)p;
-        _exit(0);                      /* if we get here, it failed to abort */
+        _exit(0);
     }
     int status = 0;
     waitpid(pid, &status, 0);
     remove(bad);
     CHECK(WIFEXITED(status));
-    CHECK(WEXITSTATUS(status) != 0);   /* aborted loudly, as required */
+    CHECK(WEXITSTATUS(status) != 0);
     printf("  corrupt policy.bin aborts the loader (no silent fallback) ... ok\n");
     return 0;
 }

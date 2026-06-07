@@ -18,20 +18,17 @@
 #define PENDING_MAX 256
 #define SAMPLE_MAX  64
 
-// networking state
 static UdpSocket          g_sock;
 static Reliable           g_rel;
 static struct sockaddr_in g_server;
 static int                g_my_id = -1;
 
-//prediction and reconciliation
-static PlayerState g_self;                 // locally predicted state 
+static PlayerState g_self;
 static uint32_t    g_input_seq = 0;
-static InputCmd    g_pending[PENDING_MAX]; // inputs not yet acked by the server
+static InputCmd    g_pending[PENDING_MAX];
 static int         g_pending_count = 0;
 static uint32_t    g_server_acked_input = 0;
 
-//remote players + interpolation
 typedef struct { double t; PlayerState s; } Sample;
 typedef struct {
     int    present;
@@ -40,14 +37,12 @@ typedef struct {
 } RemoteEntity;
 static RemoteEntity g_remote[MAX_CLIENTS];
 
-//events and HUD
 static uint32_t g_last_event_id = 0;
 static uint32_t g_last_snap_tick = 0;
 static int      g_player_count = 0;
 
 static Camera g_camera;
 
-//for maths
 static float lerpf(float a, float b, float t) { return a + (b - a) * t; }
 
 static float lerp_angle(float a, float b, float t) {
@@ -57,7 +52,6 @@ static float lerp_angle(float a, float b, float t) {
     return a + d * t;
 }
 
-//pending-input ring (oldest first)
 static void pending_push(const InputCmd *cmd) {
     if (g_pending_count >= PENDING_MAX) {
         memmove(&g_pending[0], &g_pending[1], sizeof(InputCmd) * (PENDING_MAX - 1));
@@ -76,7 +70,6 @@ static void pending_drop_acked(uint32_t acked_seq) {
     }
 }
 
-//interpolation
 static void remote_push(int id, double t, const PlayerState *s) {
     RemoteEntity *e = &g_remote[id];
     if (e->count >= SAMPLE_MAX) {
@@ -88,9 +81,6 @@ static void remote_push(int id, double t, const PlayerState *s) {
     e->count++;
 }
 
-/* Reconstruct a remote player's state at render_time by interpolating between
- * the two buffered snapshots that bracket it. Clamps (never extrapolates) at
- * the ends of the buffer. */
 static int remote_sample(int id, double render_time, PlayerState *out) {
     RemoteEntity *e = &g_remote[id];
     if (!e->present || e->count == 0) return 0;
@@ -114,7 +104,6 @@ static int remote_sample(int id, double render_time, PlayerState *out) {
     return 1;
 }
 
-//packet handling
 static void handle_snapshot(ByteBuf *b, double now) {
     uint32_t last_input = rd_u32(b);
     uint8_t  pcount     = rd_u8(b);
@@ -145,7 +134,6 @@ static void handle_snapshot(ByteBuf *b, double now) {
     for (int i = 0; i < MAX_CLIENTS; i++)
         if (!seen[i] && i != g_my_id) g_remote[i].present = 0;
 
-    //events (deduped by monotonically increasing id)
     uint8_t ecount = rd_u8(b);
     for (int i = 0; i < ecount; i++) {
         uint32_t eid    = rd_u32(b);
@@ -159,9 +147,8 @@ static void handle_snapshot(ByteBuf *b, double now) {
         }
     }
 
-    g_player_count = pcount;   // g_last_snap_tick is set by the caller from the header
+    g_player_count = pcount;
 
-    //reconciliation
     if (have_self) {
         g_self = auth_self;
         pending_drop_acked(last_input);
@@ -199,7 +186,6 @@ static void handle_packet(uint8_t *data, int len, double now) {
     }
 }
 
-//sending
 static void send_connect(double now) {
     uint8_t buf[HEADER_SIZE];
     ByteBuf b = buf_writer(buf, sizeof buf);
@@ -207,9 +193,6 @@ static void send_connect(double now) {
     net_send(&g_sock, &g_server, buf, b.pos, now);
 }
 
-/* Send the whole window of unacked inputs (capped). Resending them is what
- * makes a single lost datagram a non-event: the next packet carries the same
- * commands again until the server acks them. */
 static void send_inputs(double now) {
     uint8_t buf[MAX_PACKET];
     ByteBuf b = buf_writer(buf, sizeof buf);
@@ -217,7 +200,7 @@ static void send_inputs(double now) {
 
     int count = g_pending_count;
     if (count > MAX_INPUTS_PER_PKT) count = MAX_INPUTS_PER_PKT;
-    int start = g_pending_count - count;   //most recent `count` commands
+    int start = g_pending_count - count;
 
     wr_u32(&b, (uint32_t)g_my_id);
     wr_u8 (&b, (uint8_t)count);
@@ -230,7 +213,6 @@ static void send_inputs(double now) {
     net_send(&g_sock, &g_server, buf, b.pos, now);
 }
 
-//input sampling + GLFW callbacks
 static uint8_t sample_buttons(GLFWwindow *w) {
     uint8_t btn = 0;
     if (glfwGetKey(w, GLFW_KEY_W)          == GLFW_PRESS) btn |= BTN_FWD;
@@ -247,7 +229,6 @@ static void mouse_callback(GLFWwindow *w, double xpos, double ypos) {
     camera_on_mouse(&g_camera, xpos, ypos);
 }
 
-//rendering
 static void draw_grid(void) {
     glColor3f(0.3f, 0.3f, 0.3f);
     glBegin(GL_LINES);
@@ -271,7 +252,6 @@ static void draw_cube(float x, float y, float z, float size, float r, float g, f
     glEnd();
 }
 
-//a connection-quality swatch in the corner: green/yellow/red by packet loss
 static void draw_hud_overlay(float loss) {
     glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
     glOrtho(0, WIN_W, 0, WIN_H, -1, 1);
@@ -303,12 +283,10 @@ static void render(void) {
               0.0f, 1.0f, 0.0f);
 
     draw_grid();
-    // static sandbox props
     draw_cube(0, 1, 0, 2, 0.8f, 0.3f, 0.3f);
     draw_cube(5, 1, 3, 1.5f, 0.3f, 0.8f, 0.3f);
     draw_cube(-3, 0.5f, -5, 1, 0.3f, 0.3f, 0.8f);
 
-    // other players, interpolated 100 ms in the past
     double render_time = now_seconds() - INTERP_DELAY;
     for (int id = 0; id < MAX_CLIENTS; id++) {
         if (id == g_my_id || !g_remote[id].present) continue;
@@ -321,7 +299,6 @@ static void render(void) {
     }
 }
 
-//main
 int main(int argc, char **argv) {
     const char *host    = "127.0.0.1";
     uint16_t    port    = PULSE_DEFAULT_PORT;
@@ -338,8 +315,7 @@ int main(int argc, char **argv) {
 
     srand((unsigned)time(NULL));
 
-    // socket + server address
-    if (!net_open(&g_sock, 0)) return 1;     //ephemeral local port
+    if (!net_open(&g_sock, 0)) return 1;
     net_set_sim(&g_sock, loss, latency);
     rel_init(&g_rel);
 
@@ -353,7 +329,6 @@ int main(int argc, char **argv) {
 
     camera_init(&g_camera);
 
-    //GL window
     if (!glfwInit()) { fprintf(stderr, "[client] glfwInit failed\n"); return 1; }
     GLFWwindow *window = glfwCreateWindow(WIN_W, WIN_H, "Pulse", NULL, NULL);
     if (!window) { fprintf(stderr, "[client] window creation failed\n"); glfwTerminate(); return 1; }
@@ -391,7 +366,6 @@ int main(int argc, char **argv) {
 
         net_update(&g_sock, now);
 
-        //drain inbound
         struct sockaddr_in from;
         uint8_t buf[MAX_PACKET];
         int n;
@@ -399,7 +373,6 @@ int main(int argc, char **argv) {
             handle_packet(buf, n, now);
 
         if (g_my_id < 0) {
-            /* still handshaking */
             if (now - last_connect > 0.25) { send_connect(now); last_connect = now; }
             if (now - connect_start > CONNECT_TIMEOUT) {
                 fprintf(stderr, "[client] no response from server after %.0fs, giving up\n",
@@ -407,7 +380,6 @@ int main(int argc, char **argv) {
                 break;
             }
         } else {
-            //fixed-rate input sampling, prediction, and (redundant) send
             input_accum += dt;
             int guard = 0;
             while (input_accum >= (double)TICK_DT && guard++ < 8) {
@@ -419,7 +391,7 @@ int main(int argc, char **argv) {
                 cmd.yaw     = g_camera.yaw;
                 cmd.pitch   = g_camera.pitch;
 
-                world_apply_input(&g_self, &cmd, TICK_DT);   //prediction
+                world_apply_input(&g_self, &cmd, TICK_DT);
                 pending_push(&cmd);
                 send_inputs(now);
             }
@@ -429,7 +401,6 @@ int main(int argc, char **argv) {
         draw_hud_overlay(rel_loss(&g_rel));
         glfwSwapBuffers(window);
 
-        // live network HUD in the title bar
         if (now - last_hud >= 0.25) {
             last_hud = now;
             char title[256];
@@ -441,13 +412,12 @@ int main(int argc, char **argv) {
         }
     }
 
-    //tell the server we're leaving (best effort)
     if (g_my_id >= 0) {
         uint8_t buf[HEADER_SIZE];
         ByteBuf b = buf_writer(buf, sizeof buf);
         net_write_header(&b, &g_rel, PKT_DISCONNECT, 0, now_seconds());
         net_send(&g_sock, &g_server, buf, b.pos, now_seconds());
-        net_update(&g_sock, now_seconds() + 1.0);   //flush any delayed packets
+        net_update(&g_sock, now_seconds() + 1.0);
     }
 
     net_close(&g_sock);

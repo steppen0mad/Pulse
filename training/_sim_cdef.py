@@ -19,9 +19,6 @@ The struct transcription below is checked two ways:
     C sizeof(World) exposed by world_struct_size().
 """
 
-# NOTE: the [32] array sizes must equal MAX_CLIENTS in protocol.h. If that
-# constant changes, update these and the sizeof assertion in build_sim.py will
-# fail loudly until they match.
 CDEF = r"""
 typedef struct { float pos[3]; float yaw; float pitch; } PlayerState;
 typedef struct { uint32_t seq; uint8_t buttons; float yaw; float pitch; } InputCmd;
@@ -66,14 +63,9 @@ static const float EYE_HEIGHT;
 static const float MOVE_SPEED;
 """
 
-# Source C compiled into the extension. world.c is the shared sim; agent_obs.c is
-# the shared observation builder + action decoder. (policy.c is NOT needed --
-# training uses a PyTorch policy; the C forward pass is a deployment concern.)
 SOURCES = ["src/world.c", "src/agent_obs.c"]
 INCLUDE_DIRS = ["include"]
 
-# -ffp-contract=off matches the Makefile so the .so and the server are
-# bit-identical (no FMA contraction changing rounding).
 EXTRA_COMPILE_ARGS = ["-O2", "-std=gnu11", "-ffp-contract=off"]
 
 MODULE_NAME = "_pulse_sim"
